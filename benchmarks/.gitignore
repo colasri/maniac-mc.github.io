@@ -1,0 +1,4 @@
+# Benchmark outputs and scratch builds
+results/
+.work/
+.build/

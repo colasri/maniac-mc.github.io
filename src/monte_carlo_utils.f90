@@ -146,8 +146,7 @@ contains
         integer :: res_type
 
         ! Local variables
-        integer :: i, n_active
-        integer, allocatable :: active_indices(:)
+        integer :: i, n_active, n_seen, target
 
         ! Count active residues
         n_active = count(is_active)
@@ -157,20 +156,21 @@ contains
             return
         end if
 
-        ! Collect indices of active residues
-        allocate(active_indices(n_active))
-        n_active = 0
+        ! Pick a random rank among active ones (same single random draw as before)
+        target = INT(rand_uniform() * n_active) + 1
+
+        ! Return the index of the target-th active residue (no allocation)
+        res_type = 0
+        n_seen = 0
         do i = 1, size(is_active)
             if (is_active(i)) then
-                n_active = n_active + 1
-                active_indices(n_active) = i
+                n_seen = n_seen + 1
+                if (n_seen == target) then
+                    res_type = i
+                    return
+                end if
             end if
         end do
-
-        ! Pick a random index among active ones
-        res_type = active_indices(INT(rand_uniform() * n_active) + 1)
-
-        deallocate(active_indices)
 
     end function pick_random_residue_type
 

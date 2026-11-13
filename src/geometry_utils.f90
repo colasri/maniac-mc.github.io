@@ -220,12 +220,6 @@ contains
         integer, intent(in) :: atom_index_2                 ! atom index within the molecule (atom 2)
 
         ! Local variables
-        integer :: shift_x, shift_y, shift_z   ! periodic image shifts in triclinic search
-        integer :: dim                         ! Cartesian dimension index (1..3)
-        real(real64) :: delta(3)               ! displacement vector between atoms (with PBC)
-        real(real64) :: trial_delta(3)         ! displacement to a specific periodic image
-        real(real64) :: min_dist2              ! smallest squared distance found
-        real(real64) :: trial_dist2            ! squared distance for current image
         real(real64) :: pos1(3), pos2(3)       ! absolute Cartesian positions of the two atoms
         type(type_coordinate), pointer :: coord ! Pointer for host or guest coordinate
 
@@ -239,6 +233,34 @@ contains
         coord => get_coord(res_type_2)
         pos2 = coord%com(:, res_type_2, mol_index_2) + &
             coord%offset(:, res_type_2, mol_index_2, atom_index_2)
+
+        distance = minimum_image_distance_pos(box, pos1, pos2)
+
+    end function minimum_image_distance
+
+    !---------------------------------------------------------------------
+    ! Minimum-image distance between two Cartesian positions. Same
+    ! arithmetic as minimum_image_distance, but takes positions directly so
+    ! that hot loops can precompute them.
+    !---------------------------------------------------------------------
+    pure function minimum_image_distance_pos(box, pos1, pos2) result(distance)
+
+        ! Input parameters
+        type(type_box), intent(in) :: box              ! simulation box (geometry + PBC matrices)
+        real(real64), intent(in) :: pos1(3), pos2(3)   ! Cartesian positions of the two atoms
+
+        ! Local variables
+        integer :: shift_x, shift_y, shift_z   ! periodic image shifts in triclinic search
+        integer :: dim                         ! Cartesian dimension index (1..3)
+        real(real64) :: delta(3)               ! displacement vector between atoms (with PBC)
+        real(real64) :: trial_delta(3)         ! displacement to a specific periodic image
+        real(real64) :: min_dist2              ! smallest squared distance found
+        real(real64) :: trial_dist2            ! squared distance for current image
+
+        ! Return value
+        real(real64) :: distance               ! final minimum-image distance
+
+        distance = zero
 
         ! Compute Cartesian difference between the two atoms
         delta = pos2 - pos1
@@ -281,7 +303,7 @@ contains
 
         end if
 
-    end function minimum_image_distance
+    end function minimum_image_distance_pos
 
     !-----------------------------------------------------------
     ! Computes geometric properties of the simulation box:
