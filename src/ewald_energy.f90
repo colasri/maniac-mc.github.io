@@ -73,9 +73,16 @@ contains
         integer :: kx_idx, ky_idx, kz_idx      ! Components of current reciprocal lattice vector
         integer :: idx                         ! Loop index over precomputed k-vectors
         integer :: natoms                      ! Number of atoms in this residue type
-        real(real64) :: form_factor            ! Symmetry factor: 1 if kx=0, 2 otherwise
         logical :: creation_flag
         logical :: deletion_flag
+        integer :: atom, dim, kmax_max
+        complex(real64) :: acc                 ! Running sum over the atoms of the molecule
+        complex(real64) :: phase_new, phase_old
+
+        ! Contiguous copies of this molecule's phase factors: (k, dim, atom).
+        ! factor_guest is indexed (dim, res, mol, atom, k), so reading it directly
+        ! in the k loop jumps by 3 * res%number * (nmax+1) elements between atoms.
+        complex(real64), allocatable :: f_new(:, :, :), f_old(:, :, :)
 
         ! Ensure that the routine deals with guest, not host
         if (res%role(res_type) == TYPE_HOST) call abort_run("Inconsistence in fourier routine")
@@ -87,46 +94,77 @@ contains
         natoms = res%atom(res_type)
         ewald%q_buffer(1:natoms) = primary%atoms%charges(res_type, 1:natoms)
 
-        ! Loop over all precomputed reciprocal lattice vectors
-        do idx = 1, ewald%param%nkvec
+        ! Gather the phase factors that this update needs
+        kmax_max = maxval(ewald%param%kmax)
+        if (.not. deletion_flag) then
+            allocate(f_new(-kmax_max:kmax_max, 3, natoms))
+            do atom = 1, natoms
+                do dim = 1, 3
+                    f_new(-ewald%param%kmax(dim):ewald%param%kmax(dim), dim, atom) = &
+                        ewald%phase%factor_guest(dim, res_type, mol_index, atom, &
+                            -ewald%param%kmax(dim):ewald%param%kmax(dim))
+                end do
+            end do
+        end if
+        if (.not. creation_flag) then
+            allocate(f_old(-kmax_max:kmax_max, 3, natoms))
+            do atom = 1, natoms
+                do dim = 1, 3
+                    f_old(-ewald%param%kmax(dim):ewald%param%kmax(dim), dim, atom) = &
+                        ewald%phase%factor_old(dim, atom, &
+                            -ewald%param%kmax(dim):ewald%param%kmax(dim))
+                end do
+            end do
+        end if
 
-            ! Use pre-computed form factor
-            form_factor = ewald%form_factor(idx)
+        ! Loop over all precomputed reciprocal lattice vectors.
+        ! The per-atom products and the order of the sums are the same as in
+        ! the original array expressions, so results are unchanged.
+        do idx = 1, ewald%param%nkvec
 
             ! Current k-vector indices
             kx_idx = ewald%kvectors(idx)%kx
             ky_idx = ewald%kvectors(idx)%ky
             kz_idx = ewald%kvectors(idx)%kz
 
-            ! Compute phase factors for the current residue
-            ewald%phase%new(1:natoms) = ewald%phase%factor_guest(1, res_type, mol_index, 1:natoms, kx_idx) * &
-                ewald%phase%factor_guest(2, res_type, mol_index, 1:natoms, ky_idx) * &
-                ewald%phase%factor_guest(3, res_type, mol_index, 1:natoms, kz_idx)
-
-            ewald%phase%old(1:natoms) = ewald%phase%factor_old(1, 1:natoms, kx_idx) * &
-                ewald%phase%factor_old(2, 1:natoms, ky_idx) * &
-                ewald%phase%factor_old(3, 1:natoms, kz_idx)
+            acc = (zero, zero)
 
             ! Update Fourier coefficient A(k)
             if (creation_flag) then
 
                 ! Molecule creation
                 ! A(k) ← A(k) + Σ q_i [ e^(i k·r_i,new) ]
-                ewald%Ak(idx) = ewald%Ak(idx) + sum(ewald%q_buffer(1:natoms) * ewald%phase%new(1:natoms))
-            
+                do atom = 1, natoms
+                    phase_new = f_new(kx_idx, 1, atom) * f_new(ky_idx, 2, atom) * &
+                        f_new(kz_idx, 3, atom)
+                    acc = acc + ewald%q_buffer(atom) * phase_new
+                end do
+                ewald%Ak(idx) = ewald%Ak(idx) + acc
+
             else if (deletion_flag) then
-            
+
                 ! Molecule deletion
                 ! A(k) ← A(k) + Σ q_i [ - e^(i k·r_i,old) ]
-                ewald%Ak(idx) = ewald%Ak(idx) - sum(ewald%q_buffer(1:natoms) * ewald%phase%old(1:natoms))
-            
+                do atom = 1, natoms
+                    phase_old = f_old(kx_idx, 1, atom) * f_old(ky_idx, 2, atom) * &
+                        f_old(kz_idx, 3, atom)
+                    acc = acc + ewald%q_buffer(atom) * phase_old
+                end do
+                ewald%Ak(idx) = ewald%Ak(idx) - acc
+
             else
-            
+
                 ! Standard move (translation, rotation)
                 ! A(k) ← A(k) + Σ q_i [ e^(i k·r_i,new) - e^(i k·r_i,old) ]
-                ewald%Ak(idx) = ewald%Ak(idx) + sum(ewald%q_buffer(1:natoms) * &
-                    (ewald%phase%new(1:natoms) - ewald%phase%old(1:natoms)))
-            
+                do atom = 1, natoms
+                    phase_new = f_new(kx_idx, 1, atom) * f_new(ky_idx, 2, atom) * &
+                        f_new(kz_idx, 3, atom)
+                    phase_old = f_old(kx_idx, 1, atom) * f_old(ky_idx, 2, atom) * &
+                        f_old(kz_idx, 3, atom)
+                    acc = acc + ewald%q_buffer(atom) * (phase_new - phase_old)
+                end do
+                ewald%Ak(idx) = ewald%Ak(idx) + acc
+
             end if
 
         end do

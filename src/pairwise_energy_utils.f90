@@ -40,15 +40,29 @@ contains
         real(real64) :: epsilon                      ! Lennard-Jones epsilon parameter for atom pair (kcal/mol)
         real(real64) :: q_i                          ! Charge of atom_i (in elementary charge units, e)
         real(real64) :: q_j                          ! Charge of atom_j (in elementary charge units, e)
+        real(real64) :: pos_i(3, res%atom(res_i))    ! Positions of the atoms of molecule i
+        real(real64) :: pos_j(3)                     ! Cartesian position of atom_j
+        type(type_coordinate), pointer :: coord      ! Host or guest coordinates of a residue type
 
         e_non_coulomb = zero
         e_coulomb = zero
+
+        ! Positions of the atoms of molecule i, computed once
+        ! (same arithmetic as in minimum_image_distance)
+        coord => get_coord(res_i)
+        do atom_i = 1, res%atom(res_i)
+            pos_i(:, atom_i) = coord%com(:, res_i, mol_i) + coord%offset(:, res_i, mol_i, atom_i)
+        end do
 
         ! Loop over sites in molecule res_i
         do atom_i = 1, res%atom(res_i)
 
             ! Loop over all molecule types j
             do res_j = 1, res%number
+
+                ! Coordinates array for residue type j, looked up once per type
+                if (box%num%residues(res_j) == 0) cycle
+                coord => get_coord(res_j)
 
                 ! Loop over all molecule index j
                 do mol_j = 1, box%num%residues(res_j)
@@ -71,7 +85,8 @@ contains
                         q_j = primary%atoms%charges(res_j, atom_j)                  ! In units of e
 
                         ! Calculate the distance, accouting for periodic boundary conditions
-                        r = minimum_image_distance(box, res_i, mol_i, atom_i, res_j, mol_j, atom_j)                      ! In Angstrom
+                        pos_j = coord%com(:, res_j, mol_j) + coord%offset(:, res_j, mol_j, atom_j)
+                        r = minimum_image_distance_pos(box, pos_i(:, atom_i), pos_j) ! In Angstrom
 
                         ! Update non-Coulomb energy
                         e_non_coulomb = e_non_coulomb + pairwise_lj_energy(r, sigma, epsilon)    ! In kcal/mol
